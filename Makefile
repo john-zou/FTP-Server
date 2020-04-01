@@ -16,13 +16,15 @@ CPPFLAGS=
 CFLAGS=-g -Werror-implicit-function-declaration
 
 #List all the .o files here that need to be linked 
-OBJS=CSftp.o usage.o dir.o 
+OBJS=CSftp.o usage.o dir.o util.o
 
 usage.o: usage.c usage.h
 
 dir.o: dir.c dir.h
 
-CSftp.o: CSftp.c dir.h usage.h
+util.o: util.c util.h
+
+CSftp.o: CSftp.c dir.h usage.h util.h
 
 CSftp: $(OBJS) 
 	$(CC) -o CSftp $(OBJS) 
@@ -30,6 +32,9 @@ CSftp: $(OBJS)
 clean:
 	rm -f *.o
 	rm -f CSftp
+
+debug: CFLAGS += -DDEBUG
+debug: CSftp
 
 ### ignore the below, for the hack above
 .PHONY: run
