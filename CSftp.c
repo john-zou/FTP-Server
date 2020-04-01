@@ -1,7 +1,9 @@
 #include <stdio.h>
+#include <unistd.h> // read()
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <netinet/in.h>
+#include <string.h> // memcpy()
 
 #include "dir.h"
 #include "usage.h"
@@ -11,6 +13,8 @@
 #define MAX_PORT 65535
 #define BUFFER_SIZE 1024
 #define QUEUE_SIZE 1
+#define true 1
+#define false 0
 
 typedef struct sockaddr_in addr;
 
@@ -37,9 +41,9 @@ void startListening(int port)
     debug("sockFD: %d", sockFD);
     if (bind(sockFD, (struct sockaddr *)&serverAddress, sizeof(serverAddress)) < 0)
     {
-        debug("Bind failed!");
+        debug("bind() failed!");
     }
-    debug("bind done! ✓");
+    debug("bind() done! ✓");
     debug("starting listen() ...");
     listen(sockFD, QUEUE_SIZE);
     debug("listen() returned! ✓");
@@ -49,7 +53,14 @@ void startListening(int port)
     debug("starting accept() ...");
     int newSockFD = accept(sockFD, (struct sockaddr *)&clientAddress, &sizeofClientAddress);
     debug("accept() returned with newSockFD = %d", newSockFD);
-    // TODO: Continue here
+    char buffer[BUFFER_SIZE + 1];
+    while (true)
+    {
+        int n = read(newSockFD, buffer, BUFFER_SIZE);
+        debug("Received %d bytes.", n);
+        buffer[n] = 0; // null termination
+        debug("Received message: %s", buffer);
+    }
 }
 
 int main(int argc, char *argv[])
