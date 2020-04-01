@@ -24,7 +24,7 @@ dir.o: dir.c dir.h
 
 util.o: util.c util.h
 
-CSftp.o: CSftp.c dir.h usage.h util.h
+CSftp.o: CSftp.c dir.h usage.h util.h defines.h
 
 CSftp: $(OBJS) 
 	$(CC) -o CSftp $(OBJS) 

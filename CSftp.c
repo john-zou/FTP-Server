@@ -8,15 +8,7 @@
 #include "dir.h"
 #include "usage.h"
 #include "util.h"
-
-#define MIN_PORT 1024
-#define MAX_PORT 65535
-#define BUFFER_SIZE 1024
-#define QUEUE_SIZE 1
-#define true 1
-#define false 0
-
-typedef struct sockaddr_in addr;
+#include "defines.h"
 
 addr getServerAddress(int port)
 {
@@ -27,6 +19,34 @@ addr getServerAddress(int port)
     return address;
 }
 
+void getReply(int newSockFD)
+{
+    debug("getReply()");
+    char buffer[BUFFER_SIZE + 1];
+    while (true)
+    {
+        int n = read(newSockFD, buffer, BUFFER_SIZE);
+        debug("Received %d bytes.", n);
+        if (n <= 0)
+        {
+            break;
+        }
+        buffer[n] = 0; // null termination
+        debug("Received message: %s", buffer);
+        char code[BUFFER_SIZE + 1];
+        fgets()
+            debug("Parsed code: %s", code);
+    }
+}
+
+void startLoginSequence(int newSockFD)
+{
+    debug("startLoginSequence()");
+    char *message = "220 Welcome to FTP Server!\n";
+    write(newSockFD, message, strlen(message));
+    getReply(newSockFD);
+}
+
 void startListening(int port)
 {
     debug("startListening()");
@@ -35,7 +55,7 @@ void startListening(int port)
     addr serverAddress = getServerAddress(port);
     if (sockFD < 0)
     {
-        debug("Socket creation failed!");
+        debug("socket creation failed!");
     }
     debug("created socket! ✓");
     debug("sockFD: %d", sockFD);
@@ -53,14 +73,8 @@ void startListening(int port)
     debug("starting accept() ...");
     int newSockFD = accept(sockFD, (struct sockaddr *)&clientAddress, &sizeofClientAddress);
     debug("accept() returned with newSockFD = %d", newSockFD);
-    char buffer[BUFFER_SIZE + 1];
-    while (true)
-    {
-        int n = read(newSockFD, buffer, BUFFER_SIZE);
-        debug("Received %d bytes.", n);
-        buffer[n] = 0; // null termination
-        debug("Received message: %s", buffer);
-    }
+    startLoginSequence(newSockFD);
+    debug("startLoginSequence() returned.");
 }
 
 int main(int argc, char *argv[])
@@ -80,6 +94,8 @@ int main(int argc, char *argv[])
     }
     debug("port: %d", port);
     startListening(port);
+
+    return 0;
 
     // This is how to call the function in dir.c to get a listing of a
     // directory. It requires a file descriptor, so in your code you would pass
