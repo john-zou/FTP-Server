@@ -45,9 +45,13 @@ bool matchCommand(char *candidate, char *pattern, int *next)
             return false;
         }
     }
-    if (candidate[c] != ' ')
-    {
-        return false;
+    if (!isspace(candidate[c])) {
+        if (iscntrl(candidate[c])) {
+            *next += p;
+            return true;
+        } else {
+            return false;
+        }
     }
     *next += p + 1;
     return true;
@@ -91,7 +95,7 @@ void getArgument(incoming *inc, char *buf)
     {
         parsed[j++] = buf[i++];
     }
-    int size = j + 2;
+    int size = j + 1;
     inc->argument = malloc(sizeof(char) * size);
     for (int k = 0; k < size - 1; ++k)
     {

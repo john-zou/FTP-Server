@@ -10,6 +10,8 @@
 #include "defines.h"
 #include "util.h"
 
+void waitForClient(int sockFD);
+
 addr getServerAddress(int port)
 {
     addr address;
@@ -19,7 +21,11 @@ addr getServerAddress(int port)
     return address;
 }
 
-void getReply(int newSockFD)
+void sendReply(int newSockFD, char* message) {
+    write(newSockFD, message, strlen(message));
+}
+
+incoming getReply(int newSockFD)
 {
     debug("getReply()");
     char buffer[BUFFER_SIZE + 1];
@@ -35,18 +41,77 @@ void getReply(int newSockFD)
         debug("Received message: %s", buffer);
         incoming inc = parseIncoming(buffer);
         debug("Parsed incoming message...");
-        debug("Command: %s", inc.readableCmd);
-        debug("Argument: %s", inc.argument);
+        if (inc.command == INVALID) {
+            debug("Command = INVALID");
+        } else {
+            debug("Command: %s", inc.readableCmd);
+            debug("Argument: %s", inc.argument);
+        }
+        return inc;
     }
 }
 
-void startLoginSequence(int newSockFD)
+void successfulLogin(int newSockFD, int sockFD) {
+    while (true) {
+        incoming inc = getReply(newSockFD);
+        switch (inc.command) {
+            case INVALID:
+                sendReply(newSockFD, "500 No comprendo\n");
+                break;
+            case USER:
+                sendReply(newSockFD, "530 Can't change from cs317 user\n");
+                break;
+            case QUIT:
+                sendReply(newSockFD, "221 Goodbye.\n");
+                return;
+        }
+    }
+   
+    // switch (inc.command) {
+    
+    // }
+}
+
+void startLoginSequence(int newSockFD, int sockFD)
 {
     debug("startLoginSequence()");
     char *message = "220 Welcome to FTP Server!\n";
     write(newSockFD, message, strlen(message));
-    getReply(newSockFD);
+    incoming reply = getReply(newSockFD);
+    if (reply.command == USER) {
+        if (!strcmp(reply.argument, "cs317")) {
+            char *loginMessage = "230 Login successful.\n";
+            write(newSockFD, loginMessage, strlen(loginMessage));
+            debug("Login successful");
+            successfulLogin(newSockFD, sockFD);
+        } else {
+            char *loginMessage = "530 Not logged in\n";
+            write(newSockFD, loginMessage, strlen(loginMessage));
+            debug("Login not successful");
+        };
+    } else if (reply.command == QUIT) {
+        char *goodbyeMessage = "221 Goodbye.\n";
+        write(newSockFD, goodbyeMessage, strlen(goodbyeMessage));
+    }
+    waitForClient(sockFD);
 }
+
+void waitForClient(int sockFD){ 
+    // Prepare stuff for accepting client
+    addr clientAddress;
+    int sizeofClientAddress = sizeof(clientAddress);
+    debug("starting accept() ...");
+    int newSockFD = accept(sockFD, (struct sockaddr *)&clientAddress, &sizeofClientAddress);
+    debug("accept() returned with newSockFD = %d", newSockFD);
+    startLoginSequence(newSockFD, sockFD);
+    debug("startLoginSequence() returned.");
+}
+
+
+
+
+
+
 
 void startListening(int port)
 {
@@ -68,14 +133,7 @@ void startListening(int port)
     debug("starting listen() ...");
     listen(sockFD, QUEUE_SIZE);
     debug("listen() returned! ✓");
-    // Prepare stuff for accepting client
-    addr clientAddress;
-    int sizeofClientAddress = sizeof(clientAddress);
-    debug("starting accept() ...");
-    int newSockFD = accept(sockFD, (struct sockaddr *)&clientAddress, &sizeofClientAddress);
-    debug("accept() returned with newSockFD = %d", newSockFD);
-    startLoginSequence(newSockFD);
-    debug("startLoginSequence() returned.");
+    waitForClient(sockFD);
 }
 
 int main(int argc, char *argv[])
