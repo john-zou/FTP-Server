@@ -3,7 +3,7 @@
 
 enum command
 {
-    WTF = -1,
+    INVALID = -1,
     USER = 411 + 0, // 4.1.1
     QUIT = 411 + 1, // 4.1.1
     CWD = 411 + 2,  // 4.1.1
@@ -16,10 +16,17 @@ enum command
     NLST = 413 + 1  // 4.1.3
 };
 
+struct cmd
+{
+    char str[5];
+    enum command command;
+};
+
 struct incoming
 {
     enum command command;
-    char *arg;
+    char readableCmd[6];
+    char *argument;
 };
 
 typedef struct incoming incoming;

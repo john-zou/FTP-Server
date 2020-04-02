@@ -3,24 +3,8 @@
 #include <stdio.h>  // for printf
 #include <string.h> // for strlen
 #include <ctype.h>  // for isspace
+#include "defines.h"
 #include "util.h"
-
-int getCommand(incoming *inc, char *buf)
-{
-}
-
-incoming parseIncoming(char *buf)
-{
-    int len = strlen(buf);
-    int i = 0, j = 0;
-    while (isspace(buf[i]))
-    {
-        ++i;
-    }
-    incoming inc;
-    getCommand(&inc, buf + i);
-    // TODO continue
-}
 
 // printf debug
 void debug(const char *format, ...)
@@ -33,6 +17,105 @@ void debug(const char *format, ...)
     printf("\n");
 #endif
     return;
+}
+
+struct cmd COMMAND_STRING[] = {
+    {"USER ", USER},
+    {"QUIT ", QUIT},
+    {"CWD  ", CWD},
+    {"CDUP ", CDUP},
+    {"TYPE ", TYPE},
+    {"MODE ", MODE},
+    {"STRU ", STRU},
+    {"RETR ", RETR},
+    {"PASV ", PASV},
+    {"NLST ", NLST},
+};
+
+const int COMMAND_STRING_LEN = 10;
+
+// If valid command matched, fast-forwards next
+bool matchCommand(char *candidate, char *pattern, int *next)
+{
+    int c = 0, p = 0;
+    while (pattern[p] != ' ')
+    {
+        if (candidate[c++] != pattern[p++])
+        {
+            return false;
+        }
+    }
+    if (candidate[c] != ' ')
+    {
+        return false;
+    }
+    *next += p + 1;
+    return true;
+}
+
+// If valid command found, fast-forwards next
+void getCommand(incoming *inc, char *buf, int *next)
+{
+    char *start = buf + *next;
+    for (int i = 0; i < COMMAND_STRING_LEN; ++i)
+    {
+        if (matchCommand(start, COMMAND_STRING[i].str, next))
+        {
+            inc->command = COMMAND_STRING[i].command;
+            for (int j = 0; j < 5; ++j)
+            {
+                inc->readableCmd[j] = COMMAND_STRING[i].str[j];
+            }
+            inc->readableCmd[5] = '\0';
+            return;
+        }
+    }
+    inc->command = INVALID;
+}
+
+void getArgument(incoming *inc, char *buf)
+{
+    char parsed[BUFFER_SIZE];
+    int i = 0;
+    while (isspace(buf[i]))
+    {
+        ++i;
+    }
+    if (buf[i] == '\0')
+    {
+        inc->argument = malloc(sizeof(char));
+        inc->argument[0] = '\0';
+    }
+    int j = 0;
+    while (!isspace(buf[i]) && !iscntrl(buf[i]))
+    {
+        parsed[j++] = buf[i++];
+    }
+    int size = j + 2;
+    inc->argument = malloc(sizeof(char) * size);
+    for (int k = 0; k < size - 1; ++k)
+    {
+        inc->argument[k] = parsed[k];
+    }
+    inc->argument[size - 1] = '\0';
+}
+
+incoming parseIncoming(char *buf)
+{
+    int len = strlen(buf);
+    int i = 0, j = 0;
+    while (isspace(buf[i]))
+    {
+        ++i;
+    }
+    incoming inc;
+    getCommand(&inc, buf, &i);
+    if (inc.command == INVALID)
+    {
+        return inc;
+    }
+    getArgument(&inc, buf + i);
+    return inc;
 }
 
 // Returns 0 if the str is not an int

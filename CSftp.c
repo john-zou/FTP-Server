@@ -7,8 +7,8 @@
 
 #include "dir.h"
 #include "usage.h"
-#include "util.h"
 #include "defines.h"
+#include "util.h"
 
 addr getServerAddress(int port)
 {
@@ -31,11 +31,12 @@ void getReply(int newSockFD)
         {
             break;
         }
-        buffer[n] = 0; // null termination
+        buffer[n] = '\0'; // null termination
         debug("Received message: %s", buffer);
-        char code[BUFFER_SIZE + 1];
-        fgets()
-            debug("Parsed code: %s", code);
+        incoming inc = parseIncoming(buffer);
+        debug("Parsed incoming message...");
+        debug("Command: %s", inc.readableCmd);
+        debug("Argument: %s", inc.argument);
     }
 }
 
