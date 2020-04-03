@@ -4,6 +4,9 @@
 #include <sys/types.h>
 #include <netinet/in.h>
 #include <string.h> // memcpy()
+#include <pthread.h>
+#include <arpa/inet.h>
+#include <stdlib.h>
 
 #include "dir.h"
 #include "usage.h"
@@ -15,8 +18,9 @@ void waitForClient(int sockFD);
 addr getServerAddress(int port)
 {
     addr address;
+    bzero(&address, sizeof(addr));
     address.sin_family = AF_INET;
-    address.sin_addr.s_addr = INADDR_ANY;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     address.sin_port = htons(port);
     return address;
 }
@@ -25,13 +29,13 @@ void sendReply(int newSockFD, char* message) {
     write(newSockFD, message, strlen(message));
 }
 
-incoming getReply(int newSockFD)
+incoming getReply(int clientd)
 {
     debug("getReply()");
     char buffer[BUFFER_SIZE + 1];
     while (true)
     {
-        int n = read(newSockFD, buffer, BUFFER_SIZE);
+        int n = read(clientd, buffer, BUFFER_SIZE);
         debug("Received %d bytes.", n);
         if (n <= 0)
         {
@@ -45,25 +49,28 @@ incoming getReply(int newSockFD)
             debug("Command = INVALID");
         } else {
             debug("Command: %s", inc.readableCmd);
+            // TODO: Free argument
             debug("Argument: %s", inc.argument);
         }
         return inc;
     }
 }
 
-void successfulLogin(int newSockFD, int sockFD) {
+void successfulLogin(int clientd) {
     while (true) {
-        incoming inc = getReply(newSockFD);
+        incoming inc = getReply(clientd);
         switch (inc.command) {
             case INVALID:
-                sendReply(newSockFD, "500 No comprendo\n");
+                sendReply(clientd, "500 No comprendo\n");
                 break;
             case USER:
-                sendReply(newSockFD, "530 Can't change from cs317 user\n");
+                sendReply(clientd, "530 Can't change from cs317 user\n");
                 break;
             case QUIT:
-                sendReply(newSockFD, "221 Goodbye.\n");
+                sendReply(clientd, "221 Goodbye.\n");
                 return;
+            // case NLST:
+
         }
     }
    
@@ -72,68 +79,91 @@ void successfulLogin(int newSockFD, int sockFD) {
     // }
 }
 
-void startLoginSequence(int newSockFD, int sockFD)
+void* interact(void* args)
 {
-    debug("startLoginSequence()");
+    int clientd = *(int*) args;
+    debug("start login sequence");
     char *message = "220 Welcome to FTP Server!\n";
-    write(newSockFD, message, strlen(message));
-    incoming reply = getReply(newSockFD);
+    write(clientd, message, strlen(message));
+    incoming reply = getReply(clientd);
     if (reply.command == USER) {
+        free(reply.argument);
         if (!strcmp(reply.argument, "cs317")) {
             char *loginMessage = "230 Login successful.\n";
-            write(newSockFD, loginMessage, strlen(loginMessage));
+            write(clientd, loginMessage, strlen(loginMessage));
             debug("Login successful");
-            successfulLogin(newSockFD, sockFD);
+            successfulLogin(clientd);
         } else {
             char *loginMessage = "530 Not logged in\n";
-            write(newSockFD, loginMessage, strlen(loginMessage));
+            write(clientd, loginMessage, strlen(loginMessage));
             debug("Login not successful");
         };
     } else if (reply.command == QUIT) {
+        free(reply.argument);
         char *goodbyeMessage = "221 Goodbye.\n";
-        write(newSockFD, goodbyeMessage, strlen(goodbyeMessage));
+        write(clientd, goodbyeMessage, strlen(goodbyeMessage));
     }
-    waitForClient(sockFD);
 }
 
 void waitForClient(int sockFD){ 
     // Prepare stuff for accepting client
     addr clientAddress;
-    int sizeofClientAddress = sizeof(clientAddress);
+    socklen_t sizeofClientAddress = sizeof(clientAddress);
     debug("starting accept() ...");
-    int newSockFD = accept(sockFD, (struct sockaddr *)&clientAddress, &sizeofClientAddress);
-    debug("accept() returned with newSockFD = %d", newSockFD);
-    startLoginSequence(newSockFD, sockFD);
-    debug("startLoginSequence() returned.");
+    int clientd = accept(sockFD, (struct sockaddr *)&clientAddress, &sizeofClientAddress);
+    if (clientd < 0) {
+        return;
+    }
+    debug("Accepted the client connection from %s:%d.", inet_ntoa(clientAddress.sin_addr), ntohs(clientAddress.sin_port));
+    debug("...with newSockFD = %d", clientd);
+    pthread_t thread;
+    if (pthread_create(&thread, NULL, interact, &clientd) != 0) {
+        perror("Failed to create the thread");
+        return;
+    }
+    pthread_join(thread, NULL);
+    debug("Interaction thread has finished.");
 }
-
-
-
-
-
-
 
 void startListening(int port)
 {
     debug("startListening()");
     debug("creating socket");
-    int sockFD = socket(AF_INET, SOCK_STREAM, 0);
+    int sockFD = socket(PF_INET, SOCK_STREAM, 0);
     addr serverAddress = getServerAddress(port);
     if (sockFD < 0)
     {
         debug("socket creation failed!");
+        exit(-1);
     }
     debug("created socket! ✓");
     debug("sockFD: %d", sockFD);
+
+    // Reuse the address
+    int value = 1;
+    
+    if (setsockopt(sockFD, SOL_SOCKET, SO_REUSEADDR, &value, sizeof(int)) != 0)
+    {
+        perror("Failed to set the socket option");
+    
+        exit(-1);
+    }
+
     if (bind(sockFD, (struct sockaddr *)&serverAddress, sizeof(serverAddress)) < 0)
     {
         debug("bind() failed!");
+        exit(-1);
     }
     debug("bind() done! ✓");
     debug("starting listen() ...");
-    listen(sockFD, QUEUE_SIZE);
+    if (listen(sockFD, QUEUE_SIZE) != 0) {
+        perror("Failed to listen for connections");
+        exit(-1);
+    }
     debug("listen() returned! ✓");
-    waitForClient(sockFD);
+    while (true) {
+        waitForClient(sockFD);
+    }
 }
 
 int main(int argc, char *argv[])
@@ -163,3 +193,4 @@ int main(int argc, char *argv[])
     printf("Printed %d directory entries\n", listFiles(1, "."));
     return 0;
 }
+

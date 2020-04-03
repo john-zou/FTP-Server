@@ -13,7 +13,7 @@ all: CSftp
 #The following lines contain the generic build options
 CC=gcc
 CPPFLAGS=
-CFLAGS=-g -Werror-implicit-function-declaration
+CFLAGS=-g -Werror-implicit-function-declaration -pthread
 
 #List all the .o files here that need to be linked 
 OBJS=CSftp.o usage.o dir.o util.o
