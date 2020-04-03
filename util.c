@@ -91,7 +91,7 @@ void getArgument(incoming *inc, char *buf)
         inc->argument[0] = '\0';
     }
     int j = 0;
-    while (!isspace(buf[i]) && !iscntrl(buf[i]))
+    while (!iscntrl(buf[i]))
     {
         parsed[j++] = buf[i++];
     }

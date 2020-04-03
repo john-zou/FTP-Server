@@ -12,8 +12,9 @@ all: CSftp
 
 #The following lines contain the generic build options
 CC=gcc
+CLIBS=-pthread
 CPPFLAGS=
-CFLAGS=-g -Werror-implicit-function-declaration -pthread
+CFLAGS=-g -Werror-implicit-function-declaration
 
 #List all the .o files here that need to be linked 
 OBJS=CSftp.o usage.o dir.o util.o
@@ -27,7 +28,7 @@ util.o: util.c util.h
 CSftp.o: CSftp.c dir.h usage.h util.h defines.h
 
 CSftp: $(OBJS) 
-	$(CC) -o CSftp $(OBJS) 
+	$(CC) -o CSftp $(OBJS) $(CLIBS)
 
 clean:
 	rm -f *.o

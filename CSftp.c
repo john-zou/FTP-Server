@@ -7,13 +7,18 @@
 #include <pthread.h>
 #include <arpa/inet.h>
 #include <stdlib.h>
+#include <ifaddrs.h>
 
 #include "dir.h"
 #include "usage.h"
 #include "defines.h"
 #include "util.h"
 
+int datad = NO_DATA_CONNECTION;
+
 void waitForClient(int sockFD);
+int createSocket(int port);
+int getServerIP();
 
 addr getServerAddress(int port)
 {
@@ -25,8 +30,9 @@ addr getServerAddress(int port)
     return address;
 }
 
-void sendReply(int newSockFD, char* message) {
-    write(newSockFD, message, strlen(message));
+int sendReply(int clientd, char *message)
+{
+    return send(clientd, message, strlen(message), 0);
 }
 
 incoming getReply(int clientd)
@@ -45,9 +51,12 @@ incoming getReply(int clientd)
         debug("Received message: %s", buffer);
         incoming inc = parseIncoming(buffer);
         debug("Parsed incoming message...");
-        if (inc.command == INVALID) {
+        if (inc.command == INVALID)
+        {
             debug("Command = INVALID");
-        } else {
+        }
+        else
+        {
             debug("Command: %s", inc.readableCmd);
             // TODO: Free argument
             debug("Argument: %s", inc.argument);
@@ -56,68 +65,163 @@ incoming getReply(int clientd)
     }
 }
 
-void successfulLogin(int clientd) {
-    while (true) {
+void interactPostLogin(int clientd)
+{
+    while (true)
+    {
         incoming inc = getReply(clientd);
-        switch (inc.command) {
-            case INVALID:
-                sendReply(clientd, "500 No comprendo\n");
-                break;
-            case USER:
-                sendReply(clientd, "530 Can't change from cs317 user\n");
-                break;
-            case QUIT:
-                sendReply(clientd, "221 Goodbye.\n");
-                return;
-            // case NLST:
+        switch (inc.command)
+        {
+        case INVALID:
+            sendReply(clientd, "500 No comprendo\r\n");
+            break;
+        case USER:
+            sendReply(clientd, "530 Can't change from cs317 user\r\n");
+            break;
+        case QUIT:
+            // TODO: close both control and data
+            sendReply(clientd, "221 Goodbye.\r\n");
+            return;
+        case PASV:
+            // close exisiting data connection
+            if (datad != NO_DATA_CONNECTION)
+            {
+                close(datad);
+                datad = NO_DATA_CONNECTION;
+            }
+            // Try to create a new data connection
+            int port;
+            while (true)
+            {
+                port = (rand() % 64512) + 1024;
+                int fd = createSocket(port);
+                if (fd != -1)
+                {
+                    datad = fd;
+                    break;
+                }
+            }
+            // ok to use datad for pasv
+            debug("Established data socket. Port: %d", port);
 
+            // Get the IP address to advertise
+            addr sockaddr;
+            memset(&sockaddr, 0, sizeof(sockaddr));
+            unsigned int sockaddrlen = sizeof(sockaddr);
+            getsockname(datad, (struct sockaddr *)&sockaddr, &sockaddrlen);
+            int serverIP = getServerIP();
+
+            char ipResponse[200];
+            // memset(&ipResponse, 0, sizeof(ipResponse));
+            int mask = (1 << 8) - 1;
+            int messageLen = sprintf(ipResponse, "227 Entering passive mode (%d,%d,%d,%d,%d,%d)\r\n",
+                                     serverIP & mask,
+                                     (serverIP >> 8) & mask,
+                                     (serverIP >> 16) & mask,
+                                     (serverIP >> 24) & mask,
+                                     port / (1 << 8),
+                                     port % (1 << 8));
+            ipResponse[messageLen] = '\0';
+            if (sendReply(clientd, ipResponse))
+            {
+                debug("sendReply failed!");
+                break;
+            }
+            break;
+        case TYPE:
+            if (strcmp("A", inc.argument) == 0)
+            {
+                // ok image type
+                sendReply(clientd, "200 Switching to ASCII mode.\r\n");
+            }
+            else if (strcmp("I", inc.argument) == 0)
+            {
+                // we do not support binary
+                sendReply(clientd, "200 Switching to Binary mode.\r\n");
+            }
+            else
+            {
+                // unrecognised type command
+                sendReply(clientd, "500 Unrecognised TYPE command.\r\n");
+            }
+            break;
+        case MODE:
+            if (strcmp("S", inc.argument) == 0)
+            {
+                sendReply(clientd, "200 Mode set to S.\r\n");
+            }
+            else
+            {
+                sendReply(clientd, "500 Unrecognised MODE argument.\r\n");
+            }
+            break;
+        case STRU:
+            if (strcmp("F", inc.argument) == 0)
+            {
+                sendReply(clientd, "200 Structure set to F.\r\n");
+            }
+            else
+            {
+                sendReply(clientd, "500 Unrecognised STRU argument.\r\n");
+            }
+            break;
+        case 
         }
     }
-   
-    // switch (inc.command) {
-    
-    // }
 }
 
-void* interact(void* args)
+void *interact(void *args)
 {
-    int clientd = *(int*) args;
+    int clientd = *(int *)args;
     debug("start login sequence");
-    char *message = "220 Welcome to FTP Server!\n";
+    char *message = "220 Welcome to FTP Server!\r\n";
     write(clientd, message, strlen(message));
-    incoming reply = getReply(clientd);
-    if (reply.command == USER) {
-        free(reply.argument);
-        if (!strcmp(reply.argument, "cs317")) {
-            char *loginMessage = "230 Login successful.\n";
-            write(clientd, loginMessage, strlen(loginMessage));
-            debug("Login successful");
-            successfulLogin(clientd);
-        } else {
-            char *loginMessage = "530 Not logged in\n";
-            write(clientd, loginMessage, strlen(loginMessage));
-            debug("Login not successful");
-        };
-    } else if (reply.command == QUIT) {
-        free(reply.argument);
-        char *goodbyeMessage = "221 Goodbye.\n";
-        write(clientd, goodbyeMessage, strlen(goodbyeMessage));
+    while (true)
+    {
+        incoming reply = getReply(clientd);
+        if (reply.command == USER)
+        {
+            if (!strcmp(reply.argument, "cs317"))
+            {
+                char *loginMessage = "230 Login successful.\r\n";
+                write(clientd, loginMessage, strlen(loginMessage));
+                debug("Login successful");
+                interactPostLogin(clientd);
+                return NULL;
+            }
+            else
+            {
+                char *loginMessage = "530 Not logged in\r\n";
+                write(clientd, loginMessage, strlen(loginMessage));
+                debug("Login not successful");
+            };
+        }
+        else if (reply.command == QUIT)
+        {
+            char *goodbyeMessage = "221 Goodbye.\r\n";
+            write(clientd, goodbyeMessage, strlen(goodbyeMessage));
+            return NULL;
+        }
     }
 }
 
-void waitForClient(int sockFD){ 
+void waitForClient(int sockFD)
+{
+    datad = NO_DATA_CONNECTION; // reset datad
     // Prepare stuff for accepting client
     addr clientAddress;
     socklen_t sizeofClientAddress = sizeof(clientAddress);
     debug("starting accept() ...");
     int clientd = accept(sockFD, (struct sockaddr *)&clientAddress, &sizeofClientAddress);
-    if (clientd < 0) {
+    if (clientd < 0)
+    {
         return;
     }
     debug("Accepted the client connection from %s:%d.", inet_ntoa(clientAddress.sin_addr), ntohs(clientAddress.sin_port));
     debug("...with newSockFD = %d", clientd);
     pthread_t thread;
-    if (pthread_create(&thread, NULL, interact, &clientd) != 0) {
+    if (pthread_create(&thread, NULL, interact, &clientd) != 0)
+    {
         perror("Failed to create the thread");
         return;
     }
@@ -125,43 +229,57 @@ void waitForClient(int sockFD){
     debug("Interaction thread has finished.");
 }
 
-void startListening(int port)
+int createSocket(int port)
 {
-    debug("startListening()");
     debug("creating socket");
     int sockFD = socket(PF_INET, SOCK_STREAM, 0);
     addr serverAddress = getServerAddress(port);
     if (sockFD < 0)
     {
         debug("socket creation failed!");
-        exit(-1);
+        return -1;
     }
     debug("created socket! ✓");
     debug("sockFD: %d", sockFD);
 
     // Reuse the address
     int value = 1;
-    
+
     if (setsockopt(sockFD, SOL_SOCKET, SO_REUSEADDR, &value, sizeof(int)) != 0)
     {
         perror("Failed to set the socket option");
-    
-        exit(-1);
+
+        return -1;
     }
 
     if (bind(sockFD, (struct sockaddr *)&serverAddress, sizeof(serverAddress)) < 0)
     {
         debug("bind() failed!");
-        exit(-1);
+        return -1;
     }
     debug("bind() done! ✓");
     debug("starting listen() ...");
-    if (listen(sockFD, QUEUE_SIZE) != 0) {
+    if (listen(sockFD, QUEUE_SIZE) != 0)
+    {
         perror("Failed to listen for connections");
-        exit(-1);
+        return -1;
     }
     debug("listen() returned! ✓");
-    while (true) {
+    return sockFD;
+}
+
+void startServer(int port)
+{
+    debug("startServer()");
+    int sockFD = createSocket(port);
+    if (sockFD == -1)
+    {
+        perror("failed to create initial socket");
+        exit(-1);
+    }
+
+    while (true)
+    {
         waitForClient(sockFD);
     }
 }
@@ -182,7 +300,7 @@ int main(int argc, char *argv[])
         return -1;
     }
     debug("port: %d", port);
-    startListening(port);
+    startServer(port);
 
     return 0;
 
@@ -194,3 +312,33 @@ int main(int argc, char *argv[])
     return 0;
 }
 
+// Get the "public" server ip address
+// reference -  https://stackoverflow.com/questions/4139405/how-can-i-get-to-know-the-ip-address-for-interfaces-in-c
+int getServerIP()
+{
+    struct ifaddrs *ifap, *ifa;
+    addr *sa;
+    char *address;
+
+    getifaddrs(&ifap);
+    for (ifa = ifap; ifa; ifa = ifa->ifa_next)
+    {
+        if (ifa->ifa_addr && ifa->ifa_addr->sa_family == AF_INET)
+        {
+            sa = (addr *)ifa->ifa_addr;
+            // readable format for debug
+            address = inet_ntoa(sa->sin_addr);
+            // reject localhost
+            if (strcmp(LOOPBACK_ADDR, address) != 0)
+            {
+                debug("Interface: %s\tAddress: %s\n", ifa->ifa_name, address);
+                int ip = sa->sin_addr.s_addr;
+                freeifaddrs(ifap);
+                return ip;
+            }
+        }
+    }
+    debug("Something went horribly wrong with getServerIP");
+    freeifaddrs(ifap);
+    return -1;
+}
