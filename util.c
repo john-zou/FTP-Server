@@ -19,6 +19,47 @@ void debug(const char *format, ...)
     return;
 }
 
+bool startsWith(char *path, char *pattern)
+{
+    int len = strlen(pattern);
+    if (strlen(path) < len)
+    {
+        return false;
+    }
+    for (int i = 0; i < len; ++i)
+    {
+        if (path[i] != pattern[i])
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool contains(char *path, char *pattern)
+{
+    int pathLen = strlen(path);
+    int len = strlen(pattern);
+    if (pathLen < len)
+    {
+        return false;
+    }
+    for (int i = 0; i < pathLen - len + 1; ++i)
+    {
+        if (startsWith(path + i, pattern))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// security issue if path starts with / because client can access root
+bool isIllegalPath(char *path)
+{
+    return startsWith(path, "/") || startsWith(path, "..") || startsWith(path, ".") || contains(path, "../");
+}
+
 struct cmd COMMAND_STRING[] = {
     {"USER ", USER},
     {"QUIT ", QUIT},

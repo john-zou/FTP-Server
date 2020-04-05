@@ -11,16 +11,10 @@ returns a brand new socket file descriptor to use for this single connection.)
 TA: You should send the 150, then the results of listFile(), then 226 Directory send OK. 
 
 
-bool startsWith(char *path, char *pattern)
-{
-    int len = strlen(pattern);
-    for (int i = 0; i < len; ++i)
-    {
-        if (path[i] !=)
-    }
-}
-
-bool illegalPath(char *path)
-{
-    return startsWith(path, "./") || contains(path, "../");
-}
+https://piazza.com/class/k4szj0ldhzy433?cid=455
+1) Yes, pass the path after filtering for those 2 (remember .. is the same as ../, see @425 for more discussion on paths).
+Remember ~/ is not allowed either - @447.
+2) It should return 501 Syntax error in parameters or arguments when the number of
+parameters is incorrect. But the above answer is also correct, ftp will not allow
+you to send the command if you are missing a parameter for cd. (You can test this
+using netcat, though.)

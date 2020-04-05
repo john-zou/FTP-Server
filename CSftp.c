@@ -9,6 +9,8 @@
 #include <stdlib.h>
 #include <ifaddrs.h>
 #include <linux/limits.h> // for PATH_MAX
+#include <sys/sendfile.h>
+#include <sys/stat.h>
 
 #include "dir.h"
 #include "usage.h"
@@ -92,6 +94,9 @@ void interactPostLogin(int clientd)
             break;
         case QUIT:
             // TODO: close both control and data
+            chdir(homeDirectory);
+            memset(currentDirectory, 0, PATH_MAX);
+            strcpy(currentDirectory, homeDirectory);
             sendReply(clientd, "221 Goodbye.\r\n");
             return;
         case PASV:
@@ -147,6 +152,7 @@ void interactPostLogin(int clientd)
             if (datad < 0)
             {
                 debug("Accept failed on data connection!");
+                free(inc.argument);
                 return;
             }
             debug("Accepted the client connection from %s:%d.", inet_ntoa(clientDataAddress.sin_addr), ntohs(clientDataAddress.sin_port));
@@ -210,6 +216,121 @@ void interactPostLogin(int clientd)
                 sendReply(clientd, "226 Directory send OK.\r\n");
             }
             break;
+        case CWD:
+            debug("CWD");
+            char *path = inc.argument;
+            // check illegal path
+            debug("Trying to cwd to %s", path);
+            if (!isIllegalPath(path))
+            {
+                debug("legal path detected :^)");
+                if (chdir(path) == 0)
+                {
+                    memset(currentDirectory, 0, PATH_MAX);
+                    getcwd(currentDirectory, PATH_MAX);
+                    debug("Now current directory is: %s", currentDirectory);
+                    sendReply(clientd, "250 Directory successfully changed.\r\n");
+                    break;
+                }
+                else
+                {
+                    sendReply(clientd, "550 Failed to change directory.\r\n");
+                }
+            }
+            else
+            {
+                debug("Illegal/ inaccessible path detected :^(");
+                sendReply(clientd, "550 Illegal path.\r\n");
+            }
+            free(path);
+            break;
+
+        case CDUP:
+            // if (strlen(inc.argument) != 0) {
+            //     sendReply(clientd, "550 Failed to change directory.\r\n");
+            // }
+
+            // don't go up if already in home
+            if (strcmp(currentDirectory, homeDirectory) == 0)
+            {
+                sendReply(clientd, "550 Insufficient Permissions to go up in the directory.\r\n");
+            }
+            else
+            {
+                if (chdir("../") == 0)
+                {
+                    memset(currentDirectory, 0, PATH_MAX);
+                    getcwd(currentDirectory, PATH_MAX);
+                    debug("Changed dir to: %s", currentDirectory);
+                    sendReply(clientd, "250 Directory successfully changed.\r\n");
+                }
+                else
+                {
+                    debug("Can't change dir to ../");
+                    debug("Current dir: %s", currentDirectory);
+                    sendReply(clientd, "550 Failed to change directory.\r\n");
+                }
+            }
+            break;
+        case RETR:
+            if (datad == NO_DATA_CONNECTION)
+            {
+                sendReply(clientd, "425 Do PASV first.\r\n");
+                break;
+            }
+            else
+            {
+                char *filename = inc.argument;
+                // What if required file is /passwords.txt?? following the constraints on CWD
+                if (isIllegalPath(filename))
+                {
+                    sendReply(clientd, "550 Illegal path\r\n");
+                }
+                else
+                {
+                    // 1. open the file
+                    FILE *file = fopen(filename, "rb");
+                    if (file == NULL)
+                    {
+                        debug("file: %s not found", filename);
+                        close(datad);
+                        close(datad_local);
+                        sendReply(clientd, "550 Failed to open file.\r\n");
+                    }
+                    else
+                    {
+                        // 2. send "150 Opening binary data mode data connection for \r\n"
+                        // always in binary mode regardless of TYPE according to https://piazza.com/class/k4szj0ldhzy433?cid=616
+                        debug("Preparing to send: %s", filename);
+                        sendReply(clientd, "150 Opening binary data mode data connection.\r\n");
+
+                        // 3. send file through datad
+
+                        struct stat fileStat;
+                        fstat(fileno(file), &fileStat);
+
+                        if (sendfile(datad, fileno(file), NULL, fileStat.st_size) == -1)
+                        {
+                            // Inform the client on the control connection that an error has been encountered
+                            close(datad);
+                            close(datad_local);
+                            sendReply(clientd, "451 Transfer aborted.\r\n");
+                        }
+                        else
+                        {
+                            close(datad);
+                            close(datad_local);
+                            sendReply(clientd, "226 Transfer complete.\r\n");
+                        }
+                        fclose(file);
+                    }
+                }
+                resetDatad();
+
+                // 4. send "226 Transfer complete."
+                free(inc.argument);
+                break;
+            }
         }
     }
 }
