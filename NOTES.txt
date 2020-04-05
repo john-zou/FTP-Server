@@ -9,3 +9,18 @@ returns a brand new socket file descriptor to use for this single connection.)
 > Do I need to send any message for the pasv connection establishing along with the 150 before sending the dir listing??
 
 TA: You should send the 150, then the results of listFile(), then 226 Directory send OK. 
+
+
+bool startsWith(char *path, char *pattern)
+{
+    int len = strlen(pattern);
+    for (int i = 0; i < len; ++i)
+    {
+        if (path[i] !=)
+    }
+}
+
+bool illegalPath(char *path)
+{
+    return startsWith(path, "./") || contains(path, "../");
+}

@@ -15,7 +15,9 @@
 #include "defines.h"
 #include "util.h"
 
+int datad_local = NO_DATA_CONNECTION;
 int datad = NO_DATA_CONNECTION;
+
 char currentDirectory[PATH_MAX] = {0}; // initialized to home in main
 char homeDirectory[PATH_MAX] = {0};    // initialized to home in main
 
@@ -23,12 +25,17 @@ void waitForClient(int sockFD);
 int createSocket(int port);
 int getServerIP();
 
+void resetDatad()
+{
+    datad_local = datad = NO_DATA_CONNECTION;
+}
+
 addr getServerAddress(int port)
 {
     addr address;
     bzero(&address, sizeof(addr));
     address.sin_family = AF_INET;
-    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    address.sin_addr.s_addr = htonl(INADDR_ANY);
     address.sin_port = htons(port);
     return address;
 }
@@ -36,6 +43,7 @@ addr getServerAddress(int port)
 // Returns -1 if failed
 int sendReply(int clientd, char *message)
 {
+    debug("sending... %s", message);
     return send(clientd, message, strlen(message), 0);
 }
 
@@ -88,10 +96,10 @@ void interactPostLogin(int clientd)
             return;
         case PASV:
             // close exisiting data connection
-            if (datad != NO_DATA_CONNECTION)
+            if (datad_local != NO_DATA_CONNECTION)
             {
-                close(datad);
-                datad = NO_DATA_CONNECTION;
+                close(datad_local);
+                datad_local = NO_DATA_CONNECTION;
             }
             // Try to create a new data connection
             int port;
@@ -99,9 +107,9 @@ void interactPostLogin(int clientd)
             {
                 port = (rand() % 64512) + 1024;
                 int fd = createSocket(port);
-                if (fd != -1)
+                if (fd != NO_DATA_CONNECTION)
                 {
-                    datad = fd;
+                    datad_local = fd;
                     break;
                 }
             }
@@ -112,7 +120,7 @@ void interactPostLogin(int clientd)
             addr sockaddr;
             memset(&sockaddr, 0, sizeof(sockaddr));
             unsigned int sockaddrlen = sizeof(sockaddr);
-            getsockname(datad, (struct sockaddr *)&sockaddr, &sockaddrlen);
+            getsockname(datad_local, (struct sockaddr *)&sockaddr, &sockaddrlen);
             int serverIP = getServerIP();
 
             char ipResponse[200];
@@ -131,7 +139,20 @@ void interactPostLogin(int clientd)
                 debug("sendReply failed!");
                 break;
             }
+            // Here: accept datad_local and get datad
+            addr clientDataAddress;
+            socklen_t sizeofClientDataAddress = sizeof(clientDataAddress);
+            debug("starting accept() on data port ...");
+            datad = accept(datad_local, (struct sockaddr *)&clientDataAddress, &sizeofClientDataAddress);
+            if (datad < 0)
+            {
+                debug("Accept failed on data connection!");
+                return;
+            }
+            debug("Accepted the client connection from %s:%d.", inet_ntoa(clientDataAddress.sin_addr), ntohs(clientDataAddress.sin_port));
+            debug("...with datad = %d", datad);
             break;
+
         case TYPE:
             if (strcmp("A", inc.argument) == 0)
             {
@@ -182,6 +203,9 @@ void interactPostLogin(int clientd)
                 sendReply(clientd, "150 Here comes the directory listing.\r\n");
                 // 3. Do listFiles(datad, ) with current directory
                 listFiles(datad, currentDirectory);
+                close(datad);
+                close(datad_local);
+                resetDatad();
                 // 4. Send "226 Directory send OK.\r\n" through clientd
                 sendReply(clientd, "226 Directory send OK.\r\n");
             }
@@ -227,7 +251,7 @@ void *interact(void *args)
 
 void waitForClient(int sockFD)
 {
-    datad = NO_DATA_CONNECTION; // reset datad
+    resetDatad();
     // Prepare stuff for accepting client
     addr clientAddress;
     socklen_t sizeofClientAddress = sizeof(clientAddress);

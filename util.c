@@ -45,11 +45,15 @@ bool matchCommand(char *candidate, char *pattern, int *next)
             return false;
         }
     }
-    if (!isspace(candidate[c])) {
-        if (iscntrl(candidate[c])) {
+    if (!isspace(candidate[c]))
+    {
+        if (iscntrl(candidate[c]))
+        {
             *next += p;
             return true;
-        } else {
+        }
+        else
+        {
             return false;
         }
     }
