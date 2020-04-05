@@ -1,0 +1,11 @@
+https://piazza.com/class/k4szj0ldhzy433?cid=612
+
+> Am I suppose to be sending to the control connection because nlist is handling the pasv and nlst commands and it
+seems like it would all get printed to the control connection? 
+listFiles should take the file descriptor of the accepted connection for the passive mode socket. (Remember, accept
+returns a brand new socket file descriptor to use for this single connection.)
+
+
+> Do I need to send any message for the pasv connection establishing along with the 150 before sending the dir listing??
+
+TA: You should send the 150, then the results of listFile(), then 226 Directory send OK. 

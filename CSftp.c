@@ -8,6 +8,7 @@
 #include <arpa/inet.h>
 #include <stdlib.h>
 #include <ifaddrs.h>
+#include <linux/limits.h> // for PATH_MAX
 
 #include "dir.h"
 #include "usage.h"
@@ -15,6 +16,8 @@
 #include "util.h"
 
 int datad = NO_DATA_CONNECTION;
+char currentDirectory[PATH_MAX] = {0}; // initialized to home in main
+char homeDirectory[PATH_MAX] = {0};    // initialized to home in main
 
 void waitForClient(int sockFD);
 int createSocket(int port);
@@ -30,6 +33,7 @@ addr getServerAddress(int port)
     return address;
 }
 
+// Returns -1 if failed
 int sendReply(int clientd, char *message)
 {
     return send(clientd, message, strlen(message), 0);
@@ -122,7 +126,7 @@ void interactPostLogin(int clientd)
                                      port / (1 << 8),
                                      port % (1 << 8));
             ipResponse[messageLen] = '\0';
-            if (sendReply(clientd, ipResponse))
+            if (sendReply(clientd, ipResponse) == -1)
             {
                 debug("sendReply failed!");
                 break;
@@ -165,7 +169,23 @@ void interactPostLogin(int clientd)
                 sendReply(clientd, "500 Unrecognised STRU argument.\r\n");
             }
             break;
-        case 
+        case NLST:
+            // 1. Ensure there is a  datad connection
+            if (datad == NO_DATA_CONNECTION)
+            {
+                sendReply(clientd, "425 Do PASV first.\r\n");
+                break;
+            }
+            else
+            {
+                // 2. Send "150 Here comes the directory listing.\r\n" through clientd
+                sendReply(clientd, "150 Here comes the directory listing.\r\n");
+                // 3. Do listFiles(datad, ) with current directory
+                listFiles(datad, currentDirectory);
+                // 4. Send "226 Directory send OK.\r\n" through clientd
+                sendReply(clientd, "226 Directory send OK.\r\n");
+            }
+            break;
         }
     }
 }
@@ -292,6 +312,10 @@ int main(int argc, char *argv[])
         usage(argv[0]);
         return -1;
     }
+
+    getcwd(homeDirectory, PATH_MAX);
+    getcwd(currentDirectory, PATH_MAX);
+    debug("Home directory: %s", homeDirectory);
 
     int port = parseInt(argv[1]);
     if (port < MIN_PORT || port > MAX_PORT)
