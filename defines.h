@@ -13,6 +13,6 @@ typedef struct sockaddr_in addr;
 #define QUEUE_SIZE 1
 #define USERNAME "cs317"
 #define LOOPBACK_ADDR "127.0.0.1"
-#define NO_DATA_CONNECTION -1
+#define INVALID_DESCRIPTOR -1
 
 #endif

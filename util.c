@@ -6,7 +6,10 @@
 #include "defines.h"
 #include "util.h"
 
-// printf debug
+/**
+ *   Helper function that prints a formatted debug message and appends a newline after it
+ *   This function only does anything if "make debug" is used, which defines DEBUG.
+ **/
 void debug(const char *format, ...)
 {
 #ifdef DEBUG
@@ -19,6 +22,11 @@ void debug(const char *format, ...)
     return;
 }
 
+/**
+ *   Returns true (1) if path starts with pattern, and false (0) if it doesn't.
+ *   Arguments:  path: null-terminated char array
+ *               pattern: null-terminated char array
+ **/
 bool startsWith(char *path, char *pattern)
 {
     int len = strlen(pattern);
@@ -36,6 +44,11 @@ bool startsWith(char *path, char *pattern)
     return true;
 }
 
+/**
+ *   Returns true (1) if path contains pattern, and false (0) if it doesn't
+ *   Arguments:  path: null-terminated char array
+ *               pattern: null-terminated char array
+ **/
 bool contains(char *path, char *pattern)
 {
     int pathLen = strlen(path);
@@ -54,7 +67,10 @@ bool contains(char *path, char *pattern)
     return false;
 }
 
-// security issue if path starts with / because client can access root
+/**
+ *    Returns true (1) if path is considered dangerous, and false (0) if it isn't
+ *    Arguments:  path: null-terminated char array
+ **/
 bool isIllegalPath(char *path)
 {
     return startsWith(path, "/") || startsWith(path, "..") || startsWith(path, ".") || contains(path, "../");
@@ -75,7 +91,13 @@ struct cmd COMMAND_STRING[] = {
 
 const int COMMAND_STRING_LEN = 10;
 
-// If valid command matched, fast-forwards next
+/**
+ *   Returns true (1) if candidate starts with pattern, and sets the next offset to help parse the argument
+ *   Returns false (0) if there is no match, and does not change next
+ *   Arguments:  candidate: null-terminated char array
+ *               pattern: null-terminated char array
+ *               next: pointer to offset
+ **/
 bool matchCommand(char *candidate, char *pattern, int *next)
 {
     int c = 0, p = 0;
@@ -102,7 +124,15 @@ bool matchCommand(char *candidate, char *pattern, int *next)
     return true;
 }
 
-// If valid command found, fast-forwards next
+/**
+ *   Parses a char buffer (buf) into a command (enum), readable string of the command (readableCmd)
+ *   and saves it into inc.
+ *   Increments the next offset to help parse the argument, if a valid command is found.
+ *   
+ *   Arguments:  inc: pointer to structure containing parsed message from client
+ *               buf: null-terminated char buffer of message from client
+ *               next: pointer to offset
+ **/
 void getCommand(incoming *inc, char *buf, int *next)
 {
     char *start = buf + *next;
@@ -122,6 +152,12 @@ void getCommand(incoming *inc, char *buf, int *next)
     inc->command = INVALID;
 }
 
+/**
+ *    Saves a char buffer into inc as its argument.
+ *   
+ *    Arguments:  inc: pointer to structure containing parsed message from client
+ *                buf: null-terminated char buffer of message from client
+ **/
 void getArgument(incoming *inc, char *buf)
 {
     char parsed[BUFFER_SIZE];
@@ -133,7 +169,9 @@ void getArgument(incoming *inc, char *buf)
     if (buf[i] == '\0')
     {
         inc->argument = malloc(sizeof(char));
+        debug("stupid malloced 1 byte @ %p\n", inc->argument);
         inc->argument[0] = '\0';
+        return;
     }
     int j = 0;
     while (!iscntrl(buf[i]))
@@ -142,6 +180,7 @@ void getArgument(incoming *inc, char *buf)
     }
     int size = j + 1;
     inc->argument = malloc(sizeof(char) * size);
+    debug("malloced %d bytes @ %p\n", size, inc->argument);
     for (int k = 0; k < size - 1; ++k)
     {
         inc->argument[k] = parsed[k];
@@ -149,6 +188,12 @@ void getArgument(incoming *inc, char *buf)
     inc->argument[size - 1] = '\0';
 }
 
+/**
+ *    Parses the message from the client into a structure, returning it.
+ *
+ *    Arguments: buf: null-terminated char buffer
+ *    Return: an incoming struct, containing command (enum), readable string of command, and argument
+ **/
 incoming parseIncoming(char *buf)
 {
     int len = strlen(buf);
@@ -159,15 +204,16 @@ incoming parseIncoming(char *buf)
     }
     incoming inc;
     getCommand(&inc, buf, &i);
-    if (inc.command == INVALID)
-    {
-        return inc;
-    }
     getArgument(&inc, buf + i);
     return inc;
 }
 
-// Returns 0 if the str is not an int
+/**
+ *   Allows the programmer to pretend they are using JavaScript for a second
+ *   
+ *   Argument: str: a null-terminated string that is probably a number
+ *   Returns: the integer representation, or 0 if it's not a number
+ **/
 int parseInt(char *str)
 {
     return strtol(str, NULL, 10);

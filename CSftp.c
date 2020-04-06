@@ -17,8 +17,8 @@
 #include "defines.h"
 #include "util.h"
 
-int datad_local = NO_DATA_CONNECTION;
-int datad = NO_DATA_CONNECTION;
+int datad_local = INVALID_DESCRIPTOR;
+int datad = INVALID_DESCRIPTOR;
 
 char currentDirectory[PATH_MAX] = {0}; // initialized to home in main
 char homeDirectory[PATH_MAX] = {0};    // initialized to home in main
@@ -27,11 +27,28 @@ void waitForClient(int sockFD);
 int createSocket(int port);
 int getServerIP();
 
+/**
+ * Attempts to close any open data sending or acception ports.
+ * Called after a message is send on the data connection.
+ * **/
 void resetDatad()
 {
-    datad_local = datad = NO_DATA_CONNECTION;
+    if (datad_local != INVALID_DESCRIPTOR)
+    {
+        close(datad_local);
+        datad_local = INVALID_DESCRIPTOR;
+    }
+
+    if (datad != INVALID_DESCRIPTOR)
+    {
+        close(datad);
+        datad = INVALID_DESCRIPTOR;
+    }
 }
 
+/**
+ * Creates a IPv4 socket address structure with the specified port number
+ **/
 addr getServerAddress(int port)
 {
     addr address;
@@ -42,12 +59,23 @@ addr getServerAddress(int port)
     return address;
 }
 
-// Returns -1 if failed
-int sendReply(int clientd, char *message)
+/**
+ * Send a reply to the control connection.
+ * Print debug message if sending fails.
+ **/
+void sendReply(int clientd, char *message)
 {
-    debug("sending... %s", message);
-    return send(clientd, message, strlen(message), 0);
+    debug("Sending... %s", message);
+    int sendStatus = send(clientd, message, strlen(message), 0);
+    if (sendStatus == -1)
+    {
+        debug("Send failed.");
+    }
 }
+
+/**
+ * Read a reply from the control connection using a buffer.
+**/
 
 incoming getReply(int clientd)
 {
@@ -61,7 +89,7 @@ incoming getReply(int clientd)
         {
             break;
         }
-        buffer[n] = '\0'; // null termination
+        buffer[n] = '\0';
         debug("Received message: %s", buffer);
         incoming inc = parseIncoming(buffer);
         debug("Parsed incoming message...");
@@ -72,10 +100,192 @@ incoming getReply(int clientd)
         else
         {
             debug("Command: %s", inc.readableCmd);
-            // TODO: Free argument
             debug("Argument: %s", inc.argument);
         }
         return inc;
+    }
+}
+
+/**
+ * Opens a data connection listening and sending port for the client. 
+ * Attempts to create a socket for a random port and listen on it.
+ * Fetches the IP address of the server and sends the random port and IP to the client.
+ **/
+
+int PASVhelper(incoming inc, int clientd)
+{
+    // close exisiting data connection if there is one
+    resetDatad();
+    // Try to create a new data connection
+    int port;
+    while (true)
+    {
+        port = (rand() % 64512) + 1024;
+        int fd = createSocket(port);
+        if (fd != INVALID_DESCRIPTOR)
+        {
+            datad_local = fd;
+            break;
+        }
+    }
+    // ok to use datad for pasv
+    debug("Established data socket. Port: %d", port);
+
+    // Get the IP address to advertise
+    addr sockaddr;
+    memset(&sockaddr, 0, sizeof(sockaddr));
+    unsigned int sockaddrlen = sizeof(sockaddr);
+    getsockname(datad_local, (struct sockaddr *)&sockaddr, &sockaddrlen);
+    int serverIP = getServerIP();
+
+    char ipResponse[200];
+    // memset(&ipResponse, 0, sizeof(ipResponse));
+    int mask = (1 << 8) - 1;
+    int messageLen = sprintf(ipResponse, "227 Entering passive mode (%d,%d,%d,%d,%d,%d)\r\n",
+                             serverIP & mask,
+                             (serverIP >> 8) & mask,
+                             (serverIP >> 16) & mask,
+                             (serverIP >> 24) & mask,
+                             port / (1 << 8),
+                             port % (1 << 8));
+    ipResponse[messageLen] = '\0';
+    sendReply(clientd, ipResponse);
+
+    // accept datad_local and get datad
+    addr clientDataAddress;
+    socklen_t sizeofClientDataAddress = sizeof(clientDataAddress);
+    debug("starting accept() on data port ...");
+
+    while (datad == INVALID_DESCRIPTOR)
+    {
+        datad = accept(datad_local, (struct sockaddr *)&clientDataAddress, &sizeofClientDataAddress);
+        debug("PASV accept returned with datad: %d", datad);
+    }
+    debug("Accepted the client connection from %s:%d.", inet_ntoa(clientDataAddress.sin_addr), ntohs(clientDataAddress.sin_port));
+    debug("...with datad = %d", datad);
+    return 0;
+}
+
+/**
+ * Transfers data to the client on the port returned by PASV.
+ * Opens a local fd and sends using sendfile kernel call.
+ * Responds with errors if file not found or if unallowed/ non-existent filenames are requested.
+ **/
+int RETRhelper(incoming inc, int clientd)
+{
+    if (datad == INVALID_DESCRIPTOR)
+    {
+        sendReply(clientd, "425 Do PASV first.\r\n");
+    }
+    else
+    {
+        char *filename = inc.argument;
+        // What if required file is /passwords.txt?? following the constraints on CWD
+        if (isIllegalPath(filename))
+        {
+            sendReply(clientd, "550 Illegal path\r\n");
+        }
+        else
+        {
+            // 1. open the file
+            FILE *file = fopen(filename, "rb");
+            if (file == NULL)
+            {
+                debug("file: %s not found", filename);
+                resetDatad();
+                sendReply(clientd, "550 Failed to open file.\r\n");
+            }
+            else
+            {
+                // 2. send "150 Opening binary data mode data connection for \r\n"
+                // always in binary mode regardless of TYPE according to https://piazza.com/class/k4szj0ldhzy433?cid=616
+                debug("Preparing to send: %s", filename);
+                sendReply(clientd, "150 Opening binary data mode data connection.\r\n");
+
+                // 3. send file through datad
+
+                struct stat fileStat;
+                fstat(fileno(file), &fileStat);
+
+                if (sendfile(datad, fileno(file), NULL, fileStat.st_size) == -1)
+                {
+                    // Inform the client on the control connection that an error has been encountered
+                    resetDatad();
+                    sendReply(clientd, "451 Transfer aborted.\r\n");
+                }
+                else
+                {
+                    resetDatad();
+                    // 4. send "226 Transfer complete."
+                    sendReply(clientd, "226 Transfer complete.\r\n");
+                }
+                fclose(file);
+            }
+        }
+        resetDatad();
+    }
+    return 0;
+}
+
+/**
+ * Performs the equivalent of CWD ../
+ * Disallows going up from the home directory.
+ **/
+void CDUPhelper(incoming inc, int clientd)
+{
+    // don't go up if already in home
+    if (strcmp(currentDirectory, homeDirectory) == 0)
+    {
+        sendReply(clientd, "550 Insufficient Permissions to go up in the directory.\r\n");
+    }
+    else
+    {
+        if (chdir("../") == 0)
+        {
+            memset(currentDirectory, 0, PATH_MAX);
+            getcwd(currentDirectory, PATH_MAX);
+            debug("Changed dir to: %s", currentDirectory);
+            sendReply(clientd, "250 Directory successfully changed.\r\n");
+        }
+        else
+        {
+            debug("Can't change dir to ../");
+            debug("Current dir: %s", currentDirectory);
+            sendReply(clientd, "550 Failed to change directory.\r\n");
+        }
+    }
+}
+
+/**
+ * Changes directory to the given argument.
+ * Disallows directories starting with ../, ./ or (.. , .) as per the spec.
+ * Additionaly disallows cd /
+ **/
+void CWDhelper(incoming inc, int clientd)
+{
+    char *path = inc.argument;
+    // check illegal path
+    debug("Trying to cwd to %s", path);
+    if (!isIllegalPath(path))
+    {
+        debug("legal path detected :^)");
+        if (chdir(path) == 0)
+        {
+            memset(currentDirectory, 0, PATH_MAX);
+            getcwd(currentDirectory, PATH_MAX);
+            debug("Now current directory is: %s", currentDirectory);
+            sendReply(clientd, "250 Directory successfully changed.\r\n");
+            return;
+        }
+        else
+        {
+            sendReply(clientd, "550 Failed to change directory.\r\n");
+        }
+    }
+    else
+    {
+        debug("Illegal/ inaccessible path detected :^(");
+        sendReply(clientd, "550 Illegal path.\r\n");
     }
 }
 
@@ -93,263 +303,96 @@ void interactPostLogin(int clientd)
             sendReply(clientd, "530 Can't change from cs317 user\r\n");
             break;
         case QUIT:
-            // TODO: close both control and data
             chdir(homeDirectory);
             memset(currentDirectory, 0, PATH_MAX);
             strcpy(currentDirectory, homeDirectory);
             sendReply(clientd, "221 Goodbye.\r\n");
+            resetDatad();
+            free(inc.argument);
+            debug("Freed %p\n", inc.argument);
             return;
         case PASV:
-            // close exisiting data connection
-            if (datad_local != NO_DATA_CONNECTION)
-            {
-                close(datad_local);
-                datad_local = NO_DATA_CONNECTION;
-            }
-            // Try to create a new data connection
-            int port;
-            while (true)
-            {
-                port = (rand() % 64512) + 1024;
-                int fd = createSocket(port);
-                if (fd != NO_DATA_CONNECTION)
-                {
-                    datad_local = fd;
-                    break;
-                }
-            }
-            // ok to use datad for pasv
-            debug("Established data socket. Port: %d", port);
-
-            // Get the IP address to advertise
-            addr sockaddr;
-            memset(&sockaddr, 0, sizeof(sockaddr));
-            unsigned int sockaddrlen = sizeof(sockaddr);
-            getsockname(datad_local, (struct sockaddr *)&sockaddr, &sockaddrlen);
-            int serverIP = getServerIP();
-
-            char ipResponse[200];
-            // memset(&ipResponse, 0, sizeof(ipResponse));
-            int mask = (1 << 8) - 1;
-            int messageLen = sprintf(ipResponse, "227 Entering passive mode (%d,%d,%d,%d,%d,%d)\r\n",
-                                     serverIP & mask,
-                                     (serverIP >> 8) & mask,
-                                     (serverIP >> 16) & mask,
-                                     (serverIP >> 24) & mask,
-                                     port / (1 << 8),
-                                     port % (1 << 8));
-            ipResponse[messageLen] = '\0';
-            if (sendReply(clientd, ipResponse) == -1)
-            {
-                debug("sendReply failed!");
-                break;
-            }
-            // Here: accept datad_local and get datad
-            addr clientDataAddress;
-            socklen_t sizeofClientDataAddress = sizeof(clientDataAddress);
-            debug("starting accept() on data port ...");
-            datad = accept(datad_local, (struct sockaddr *)&clientDataAddress, &sizeofClientDataAddress);
-            if (datad < 0)
-            {
-                debug("Accept failed on data connection!");
-                free(inc.argument);
-                return;
-            }
-            debug("Accepted the client connection from %s:%d.", inet_ntoa(clientDataAddress.sin_addr), ntohs(clientDataAddress.sin_port));
-            debug("...with datad = %d", datad);
+            PASVhelper(inc, clientd);
             break;
-
         case TYPE:
+            // only supoort ascii (A) and binary (B) type
             if (strcmp("A", inc.argument) == 0)
-            {
-                // ok image type
                 sendReply(clientd, "200 Switching to ASCII mode.\r\n");
-            }
             else if (strcmp("I", inc.argument) == 0)
-            {
-                // we do not support binary
                 sendReply(clientd, "200 Switching to Binary mode.\r\n");
-            }
             else
-            {
-                // unrecognised type command
                 sendReply(clientd, "500 Unrecognised TYPE command.\r\n");
-            }
             break;
         case MODE:
+            // only support stream mode
             if (strcmp("S", inc.argument) == 0)
-            {
                 sendReply(clientd, "200 Mode set to S.\r\n");
-            }
             else
-            {
                 sendReply(clientd, "500 Unrecognised MODE argument.\r\n");
-            }
             break;
         case STRU:
+            // only support F type
             if (strcmp("F", inc.argument) == 0)
-            {
                 sendReply(clientd, "200 Structure set to F.\r\n");
-            }
             else
-            {
                 sendReply(clientd, "500 Unrecognised STRU argument.\r\n");
-            }
             break;
         case NLST:
             // 1. Ensure there is a  datad connection
-            if (datad == NO_DATA_CONNECTION)
+            if (datad == INVALID_DESCRIPTOR)
             {
                 sendReply(clientd, "425 Do PASV first.\r\n");
                 break;
             }
-            else
-            {
-                // 2. Send "150 Here comes the directory listing.\r\n" through clientd
-                sendReply(clientd, "150 Here comes the directory listing.\r\n");
-                // 3. Do listFiles(datad, ) with current directory
-                listFiles(datad, currentDirectory);
-                close(datad);
-                close(datad_local);
-                resetDatad();
-                // 4. Send "226 Directory send OK.\r\n" through clientd
-                sendReply(clientd, "226 Directory send OK.\r\n");
-            }
+            // 2. Send "150 Here comes the directory listing.\r\n" through clientd
+            sendReply(clientd, "150 Here comes the directory listing.\r\n");
+            // 3. Do listFiles with current directory
+            listFiles(datad, currentDirectory);
+            // 4. Close data connection
+            resetDatad();
+            // 5. Send "226 Directory send OK.\r\n" through clientd
+            sendReply(clientd, "226 Directory send OK.\r\n");
             break;
         case CWD:
-            debug("CWD");
-            char *path = inc.argument;
-            // check illegal path
-            debug("Trying to cwd to %s", path);
-            if (!isIllegalPath(path))
-            {
-                debug("legal path detected :^)");
-                if (chdir(path) == 0)
-                {
-                    memset(currentDirectory, 0, PATH_MAX);
-                    getcwd(currentDirectory, PATH_MAX);
-                    debug("Now current directory is: %s", currentDirectory);
-                    sendReply(clientd, "250 Directory successfully changed.\r\n");
-                    break;
-                }
-                else
-                {
-                    sendReply(clientd, "550 Failed to change directory.\r\n");
-                }
-            }
-            else
-            {
-                debug("Illegal/ inaccessible path detected :^(");
-                sendReply(clientd, "550 Illegal path.\r\n");
-            }
-            free(path);
+            CWDhelper(inc, clientd);
             break;
-
         case CDUP:
-            // if (strlen(inc.argument) != 0) {
-            //     sendReply(clientd, "550 Failed to change directory.\r\n");
-            // }
-
-            // don't go up if already in home
-            if (strcmp(currentDirectory, homeDirectory) == 0)
-            {
-                sendReply(clientd, "550 Insufficient Permissions to go up in the directory.\r\n");
-            }
-            else
-            {
-                if (chdir("../") == 0)
-                {
-                    memset(currentDirectory, 0, PATH_MAX);
-                    getcwd(currentDirectory, PATH_MAX);
-                    debug("Changed dir to: %s", currentDirectory);
-                    sendReply(clientd, "250 Directory successfully changed.\r\n");
-                }
-                else
-                {
-                    debug("Can't change dir to ../");
-                    debug("Current dir: %s", currentDirectory);
-                    sendReply(clientd, "550 Failed to change directory.\r\n");
-                }
-            }
+            CDUPhelper(inc, clientd);
             break;
         case RETR:
-            if (datad == NO_DATA_CONNECTION)
-            {
-                sendReply(clientd, "425 Do PASV first.\r\n");
-                break;
-            }
-            else
-            {
-                char *filename = inc.argument;
-                // What if required file is /passwords.txt?? following the constraints on CWD
-                if (isIllegalPath(filename))
-                {
-                    sendReply(clientd, "550 Illegal path\r\n");
-                }
-                else
-                {
-                    // 1. open the file
-                    FILE *file = fopen(filename, "rb");
-                    if (file == NULL)
-                    {
-                        debug("file: %s not found", filename);
-                        close(datad);
-                        close(datad_local);
-                        sendReply(clientd, "550 Failed to open file.\r\n");
-                    }
-                    else
-                    {
-                        // 2. send "150 Opening binary data mode data connection for \r\n"
-                        // always in binary mode regardless of TYPE according to https://piazza.com/class/k4szj0ldhzy433?cid=616
-                        debug("Preparing to send: %s", filename);
-                        sendReply(clientd, "150 Opening binary data mode data connection.\r\n");
-
-                        // 3. send file through datad
-
-                        struct stat fileStat;
-                        fstat(fileno(file), &fileStat);
-
-                        if (sendfile(datad, fileno(file), NULL, fileStat.st_size) == -1)
-                        {
-                            // Inform the client on the control connection that an error has been encountered
-                            close(datad);
-                            close(datad_local);
-                            sendReply(clientd, "451 Transfer aborted.\r\n");
-                        }
-                        else
-                        {
-                            close(datad);
-                            close(datad_local);
-                            sendReply(clientd, "226 Transfer complete.\r\n");
-                        }
-                        fclose(file);
-                    }
-                }
-                resetDatad();
-
-                // 4. send "226 Transfer complete."
-                free(inc.argument);
-                break;
-            }
+            RETRhelper(inc, clientd);
+            break;
         }
+        free(inc.argument);
+        debug("Freed %p\n", inc.argument);
     }
 }
+/**
+ * Interacts with the client after the initial connection is setup.
+ * Logs in a client if the username is cs317.
+ * Sends a login fail error otherwise and keeps listening.
+ * Returns if the client quits before logging in.
+ */
 
 void *interact(void *args)
 {
     int clientd = *(int *)args;
     debug("start login sequence");
     char *message = "220 Welcome to FTP Server!\r\n";
-    write(clientd, message, strlen(message));
+    sendReply(clientd, message);
     while (true)
     {
-        incoming reply = getReply(clientd);
-        if (reply.command == USER)
+        incoming inc = getReply(clientd);
+        if (inc.command == USER)
         {
-            if (!strcmp(reply.argument, "cs317"))
+            // if client is cs317
+            if (!strcmp(inc.argument, "cs317"))
             {
+                free(inc.argument);
+                debug("Freed %p\n", inc.argument);
+
                 char *loginMessage = "230 Login successful.\r\n";
-                write(clientd, loginMessage, strlen(loginMessage));
+                sendReply(clientd, loginMessage);
                 debug("Login successful");
                 interactPostLogin(clientd);
                 return NULL;
@@ -357,19 +400,32 @@ void *interact(void *args)
             else
             {
                 char *loginMessage = "530 Not logged in\r\n";
-                write(clientd, loginMessage, strlen(loginMessage));
+                sendReply(clientd, loginMessage);
                 debug("Login not successful");
             };
         }
-        else if (reply.command == QUIT)
+        else if (inc.command == QUIT)
         {
             char *goodbyeMessage = "221 Goodbye.\r\n";
-            write(clientd, goodbyeMessage, strlen(goodbyeMessage));
+            free(inc.argument);
+            debug("Freed %p\n", inc.argument);
+
+            sendReply(clientd, goodbyeMessage);
             return NULL;
         }
+        else
+        {
+            sendReply(clientd, "500 Unsupported.\r\n");
+        }
+        free(inc.argument);
+        debug("Freed %p\n", inc.argument);
     }
 }
 
+/**
+ * Handles incoming client connections and creates a new thread to interact with the client.
+ * Closes a client connection after the client quits or errors occur during interaction.
+ */
 void waitForClient(int sockFD)
 {
     resetDatad();
@@ -377,10 +433,12 @@ void waitForClient(int sockFD)
     addr clientAddress;
     socklen_t sizeofClientAddress = sizeof(clientAddress);
     debug("starting accept() ...");
-    int clientd = accept(sockFD, (struct sockaddr *)&clientAddress, &sizeofClientAddress);
-    if (clientd < 0)
+    int clientd = INVALID_DESCRIPTOR;
+
+    while (clientd == INVALID_DESCRIPTOR)
     {
-        return;
+        clientd = accept(sockFD, (struct sockaddr *)&clientAddress, &sizeofClientAddress);
+        debug("Accepting control connection on clientd: %d", clientd);
     }
     debug("Accepted the client connection from %s:%d.", inet_ntoa(clientAddress.sin_addr), ntohs(clientAddress.sin_port));
     debug("...with newSockFD = %d", clientd);
@@ -391,9 +449,14 @@ void waitForClient(int sockFD)
         return;
     }
     pthread_join(thread, NULL);
-    debug("Interaction thread has finished.");
+    debug("Closing clientd socket #%d", clientd);
+    close(clientd);
 }
 
+/**
+ * Creates a socket for a specified port, bind and listen on it.
+ * Used for both data and control.
+ **/
 int createSocket(int port)
 {
     debug("creating socket");
@@ -433,11 +496,15 @@ int createSocket(int port)
     return sockFD;
 }
 
+/**
+ * Starts the server on the user-defined port.
+ * Argument: port: the user-defined port
+ **/
 void startServer(int port)
 {
     debug("startServer()");
     int sockFD = createSocket(port);
-    if (sockFD == -1)
+    if (sockFD == INVALID_DESCRIPTOR)
     {
         perror("failed to create initial socket");
         exit(-1);
@@ -472,17 +539,13 @@ int main(int argc, char *argv[])
     startServer(port);
 
     return 0;
-
-    // This is how to call the function in dir.c to get a listing of a
-    // directory. It requires a file descriptor, so in your code you would pass
-    // in the file descriptor returned for the ftp server's data connection
-
-    printf("Printed %d directory entries\n", listFiles(1, "."));
-    return 0;
 }
 
-// Get the "public" server ip address
-// reference -  https://stackoverflow.com/questions/4139405/how-can-i-get-to-know-the-ip-address-for-interfaces-in-c
+/** 
+ *   Get the "public" server ip address
+ *   Reference -  https://stackoverflow.com/questions/4139405/how-can-i-get-to-know-the-ip-address-for-interfaces-in-c
+ *   Returns the IP address and port number as an int
+ **/
 int getServerIP()
 {
     struct ifaddrs *ifap, *ifa;

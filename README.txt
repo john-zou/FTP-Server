@@ -1,0 +1,1 @@
+Please use "make debug" to see the debugger output which contains a LOT of information.
