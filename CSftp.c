@@ -76,7 +76,6 @@ void sendReply(int clientd, char *message)
 /**
  * Read a reply from the control connection using a buffer.
 **/
-
 incoming getReply(int clientd)
 {
     debug("getReply()");
@@ -85,9 +84,10 @@ incoming getReply(int clientd)
     {
         int n = read(clientd, buffer, BUFFER_SIZE);
         debug("Received %d bytes.", n);
+        // Handle unexpected quit
         if (n <= 0)
         {
-            break;
+            return parseIncoming("QUIT");
         }
         buffer[n] = '\0';
         debug("Received message: %s", buffer);
@@ -111,8 +111,7 @@ incoming getReply(int clientd)
  * Attempts to create a socket for a random port and listen on it.
  * Fetches the IP address of the server and sends the random port and IP to the client.
  **/
-
-int PASVhelper(incoming inc, int clientd)
+int PASVhelper(int clientd)
 {
     // close exisiting data connection if there is one
     resetDatad();
@@ -171,7 +170,7 @@ int PASVhelper(incoming inc, int clientd)
  * Opens a local fd and sends using sendfile kernel call.
  * Responds with errors if file not found or if unallowed/ non-existent filenames are requested.
  **/
-int RETRhelper(incoming inc, int clientd)
+int RETRhelper(incoming *inc, int clientd)
 {
     if (datad == INVALID_DESCRIPTOR)
     {
@@ -179,7 +178,7 @@ int RETRhelper(incoming inc, int clientd)
     }
     else
     {
-        char *filename = inc.argument;
+        char *filename = inc->argument;
         // What if required file is /passwords.txt?? following the constraints on CWD
         if (isIllegalPath(filename))
         {
@@ -231,7 +230,7 @@ int RETRhelper(incoming inc, int clientd)
  * Performs the equivalent of CWD ../
  * Disallows going up from the home directory.
  **/
-void CDUPhelper(incoming inc, int clientd)
+void CDUPhelper(int clientd)
 {
     // don't go up if already in home
     if (strcmp(currentDirectory, homeDirectory) == 0)
@@ -261,14 +260,31 @@ void CDUPhelper(incoming inc, int clientd)
  * Disallows directories starting with ../, ./ or (.. , .) as per the spec.
  * Additionaly disallows cd /
  **/
-void CWDhelper(incoming inc, int clientd)
+void CWDhelper(incoming *inc, int clientd)
 {
-    char *path = inc.argument;
+    char *path = inc->argument;
     // check illegal path
     debug("Trying to cwd to %s", path);
     if (!isIllegalPath(path))
     {
         debug("legal path detected :^)");
+        if (startsWith(path, "/"))
+        {
+            // 1. Make a copy of path
+            char path_copy[strlen(path) + 1];
+            strcpy(path_copy, path);
+            // 2. Realloc path to PATH_MAX
+            free(inc->argument);
+            inc->argument = malloc(PATH_MAX);
+            path = inc->argument;
+            // 3. Copy home dir in path
+            memset(path, 0, PATH_MAX);
+            size_t homeLen = strlen(homeDirectory);
+            memcpy(path, homeDirectory, homeLen);
+            // 4. Append client path to home directory in "path"
+            memcpy(path + homeLen, path_copy, strlen(path_copy) + 1); // +1 for null terminator
+        }
+
         if (chdir(path) == 0)
         {
             memset(currentDirectory, 0, PATH_MAX);
@@ -289,6 +305,10 @@ void CWDhelper(incoming inc, int clientd)
     }
 }
 
+/**
+ * The main interaction loop with the client control connection
+ * 
+ **/
 void interactPostLogin(int clientd)
 {
     while (true)
@@ -300,9 +320,19 @@ void interactPostLogin(int clientd)
             sendReply(clientd, "500 No comprendo\r\n");
             break;
         case USER:
+            if (inc.numArguments != ONE_ARGUMENT)
+            {
+                sendReply(clientd, INA501);
+                break;
+            }
             sendReply(clientd, "530 Can't change from cs317 user\r\n");
             break;
         case QUIT:
+            if (inc.numArguments != NO_ARGUMENTS)
+            {
+                sendReply(clientd, INA501);
+                break;
+            }
             chdir(homeDirectory);
             memset(currentDirectory, 0, PATH_MAX);
             strcpy(currentDirectory, homeDirectory);
@@ -312,32 +342,63 @@ void interactPostLogin(int clientd)
             debug("Freed %p\n", inc.argument);
             return;
         case PASV:
-            PASVhelper(inc, clientd);
+            if (inc.numArguments != NO_ARGUMENTS)
+            {
+                sendReply(clientd, INA501);
+                break;
+            }
+            PASVhelper(clientd);
             break;
         case TYPE:
+            if (inc.numArguments != ONE_ARGUMENT)
+            {
+                sendReply(clientd, INA501);
+                break;
+            }
             // only supoort ascii (A) and binary (B) type
             if (strcmp("A", inc.argument) == 0)
                 sendReply(clientd, "200 Switching to ASCII mode.\r\n");
             else if (strcmp("I", inc.argument) == 0)
                 sendReply(clientd, "200 Switching to Binary mode.\r\n");
+            else if (strcmp("E", inc.argument) == 0 || strcmp("L", inc.argument) == 0)
+                sendReply(clientd, CNI504);
             else
-                sendReply(clientd, "500 Unrecognised TYPE command.\r\n");
+                sendReply(clientd, "501 Unrecognised TYPE argument.\r\n");
             break;
         case MODE:
+            if (inc.numArguments != ONE_ARGUMENT)
+            {
+                sendReply(clientd, INA501);
+                break;
+            }
             // only support stream mode
             if (strcmp("S", inc.argument) == 0)
                 sendReply(clientd, "200 Mode set to S.\r\n");
+            else if (strcmp("B", inc.argument) == 0 || strcmp("C", inc.argument) == 0)
+                sendReply(clientd, CNI504);
             else
-                sendReply(clientd, "500 Unrecognised MODE argument.\r\n");
+                sendReply(clientd, "501 Unrecognised MODE argument.\r\n");
             break;
         case STRU:
+            if (inc.numArguments != ONE_ARGUMENT)
+            {
+                sendReply(clientd, INA501);
+                break;
+            }
             // only support F type
             if (strcmp("F", inc.argument) == 0)
                 sendReply(clientd, "200 Structure set to F.\r\n");
+            else if (strcmp("R", inc.argument) == 0 || strcmp("P", inc.argument))
+                sendReply(clientd, CNI504);
             else
-                sendReply(clientd, "500 Unrecognised STRU argument.\r\n");
+                sendReply(clientd, "501 Unrecognised STRU argument.\r\n");
             break;
         case NLST:
+            if (inc.numArguments != NO_ARGUMENTS)
+            {
+                sendReply(clientd, INA501);
+                break;
+            }
             // 1. Ensure there is a  datad connection
             if (datad == INVALID_DESCRIPTOR)
             {
@@ -354,13 +415,28 @@ void interactPostLogin(int clientd)
             sendReply(clientd, "226 Directory send OK.\r\n");
             break;
         case CWD:
-            CWDhelper(inc, clientd);
+            if (inc.numArguments != ONE_ARGUMENT)
+            {
+                sendReply(clientd, INA501);
+                break;
+            }
+            CWDhelper(&inc, clientd);
             break;
         case CDUP:
-            CDUPhelper(inc, clientd);
+            if (inc.numArguments != NO_ARGUMENTS)
+            {
+                sendReply(clientd, INA501);
+                break;
+            }
+            CDUPhelper(clientd);
             break;
         case RETR:
-            RETRhelper(inc, clientd);
+            if (inc.numArguments != ONE_ARGUMENT)
+            {
+                sendReply(clientd, INA501);
+                break;
+            }
+            RETRhelper(&inc, clientd);
             break;
         }
         free(inc.argument);
@@ -373,7 +449,6 @@ void interactPostLogin(int clientd)
  * Sends a login fail error otherwise and keeps listening.
  * Returns if the client quits before logging in.
  */
-
 void *interact(void *args)
 {
     int clientd = *(int *)args;
@@ -385,8 +460,12 @@ void *interact(void *args)
         incoming inc = getReply(clientd);
         if (inc.command == USER)
         {
+            if (inc.numArguments != ONE_ARGUMENT)
+            {
+                sendReply(clientd, INA501);
+            }
             // if client is cs317
-            if (!strcmp(inc.argument, "cs317"))
+            else if (!strcmp(inc.argument, "cs317"))
             {
                 free(inc.argument);
                 debug("Freed %p\n", inc.argument);
@@ -406,6 +485,11 @@ void *interact(void *args)
         }
         else if (inc.command == QUIT)
         {
+            if (inc.numArguments != NO_ARGUMENTS)
+            {
+                sendReply(clientd, INA501);
+                break;
+            }
             char *goodbyeMessage = "221 Goodbye.\r\n";
             free(inc.argument);
             debug("Freed %p\n", inc.argument);

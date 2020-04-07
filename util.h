@@ -27,10 +27,12 @@ struct incoming
     enum command command;
     char readableCmd[6];
     char *argument;
+    int numArguments;
 };
 
 typedef struct incoming incoming;
 
+bool startsWith(char *path, char *pattern);
 bool isIllegalPath(char *path);
 incoming parseIncoming(char *buf);
 int parseInt(char *str);

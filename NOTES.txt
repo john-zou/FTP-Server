@@ -18,3 +18,7 @@ Remember ~/ is not allowed either - @447.
 parameters is incorrect. But the above answer is also correct, ftp will not allow
 you to send the command if you are missing a parameter for cd. (You can test this
 using netcat, though.)
+
+TYPE: E,L - 504
+MODE - B,C 
+STRU - R,P

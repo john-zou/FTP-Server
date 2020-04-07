@@ -73,7 +73,7 @@ bool contains(char *path, char *pattern)
  **/
 bool isIllegalPath(char *path)
 {
-    return startsWith(path, "/") || startsWith(path, "..") || startsWith(path, ".") || contains(path, "../");
+    return !strcmp(path, "..") || startsWith(path, "./") || contains(path, "../");
 }
 
 struct cmd COMMAND_STRING[] = {
@@ -153,13 +153,14 @@ void getCommand(incoming *inc, char *buf, int *next)
 }
 
 /**
- *    Saves a char buffer into inc as its argument.
+ *    Saves a char buffer into inc as its argument and saves the number of arguments (separated by whitespace).
  *   
  *    Arguments:  inc: pointer to structure containing parsed message from client
  *                buf: null-terminated char buffer of message from client
  **/
 void getArgument(incoming *inc, char *buf)
 {
+    inc->numArguments = NO_ARGUMENTS;
     char parsed[BUFFER_SIZE];
     int i = 0;
     while (isspace(buf[i]))
@@ -174,11 +175,38 @@ void getArgument(incoming *inc, char *buf)
         return;
     }
     int j = 0;
+    bool noSpace = true;
+    bool stopCopying = false;
     while (!iscntrl(buf[i]))
     {
-        parsed[j++] = buf[i++];
+        if (isspace(buf[i]))
+        {
+            stopCopying = true;
+        }
+        if (j > 0 && isspace(buf[i - 1]) && !isspace(buf[i]))
+        {
+            noSpace = false;
+        }
+        if (!stopCopying)
+        {
+            parsed[j++] = buf[i++];
+        } else {
+            i++;
+        }
     }
     int size = j + 1;
+    if (j > 0)
+    {
+        inc->numArguments = ONE_ARGUMENT;
+    }
+    if (!noSpace)
+    {
+        inc->numArguments = MORE_THAN_ONE_ARGUMENTS;
+    }
+    if (j == 0)
+    {
+        inc->numArguments = NO_ARGUMENTS;
+    }
     inc->argument = malloc(sizeof(char) * size);
     debug("malloced %d bytes @ %p\n", size, inc->argument);
     for (int k = 0; k < size - 1; ++k)
