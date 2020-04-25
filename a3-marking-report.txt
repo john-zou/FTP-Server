@@ -1,5 +1,5 @@
-Total before late penalty: [/40]
-Bonus [/2]
+Total before late penalty: [42/40]
+Bonus [2/2]
 NOTE: in the marking report something left blank (e.g.  [ /6]) typically means
 that you got full marks for that item. 
 
